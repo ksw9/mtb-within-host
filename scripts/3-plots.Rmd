@@ -1,0 +1,817 @@
+---
+title: "3-plots.Rmd"
+output: html_document
+---
+# Main steps:
+# Plot shared iSNVs
+# Summarize shared iSNVs in table form
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+remove(list=ls())
+# Source config file
+library(here)
+here()
+source(here('scripts/config.R'))
+library(ggbeeswarm)
+library(ggsci)
+library(gtsummary)
+library(colorspace)
+library(cowplot)
+library(ggridges)
+library(infer)
+library(yardstick)
+library(lme4)
+library(ggpubr)
+library(rstatix)
+library(ape)
+library(ggtree)
+library(harrietr)
+library(ggh4x)
+```
+
+```{r pairwise diffs}
+#### pairwise snp differences ####
+
+# Read in fastas, get pairwise distances
+fasta_file1 <- here('results/fasta/vitoria_PPEmask_snps.fa')
+f1 <- read.dna(file = fasta_file1, format = 'fasta')
+d1 <- dist.dna(f1, model = 'N', as.matrix = TRUE, pairwise.deletion = TRUE)  
+
+meta_vitoria_file = here('metadata/vitoria.csv')
+meta_vitoria = read_csv(meta_vitoria_file)
+
+# Distances 
+d_long1 <- d1 %>% 
+  melt_dist() %>% 
+  rowwise() %>%
+  mutate(pair_name = paste(sort(c(iso1,iso2)), collapse = '_')) %>%
+  # Remove duplicates--already done
+  group_by(pair_name) %>% slice(1) %>%
+  left_join(meta_vitoria[,c("Index case","HHC","months","pair_name")], by = c('pair_name')) %>%
+  mutate(pair_id = case_when(iso1 == iso2 ~ 'Sample',
+                             !is.na(months) ~ 'Household',
+                             TRUE ~ 'Outside household'))
+
+table(d_long1$pair_id)
+
+# Read in fastas, get pairwise distances
+fasta_file2 <- here('results/fasta/bc_PPEmask_snps.fa')
+f2 <- read.dna(file = fasta_file2, format = 'fasta')
+d2 <- dist.dna(f2, model = 'N', as.matrix = TRUE, pairwise.deletion = FALSE)  
+
+meta_bc_file = here('metadata/bc.csv')
+meta_bc = read_csv(meta_bc_file)
+
+# Distances 
+d_long2 <- d2 %>% 
+  melt_dist() %>% 
+  rowwise() %>%
+  mutate(pair_name = paste(sort(c(iso1,iso2)), collapse = '_')) %>%
+  # Remove duplicates--already done
+  group_by(pair_name) %>% slice(1) %>%
+  left_join(meta_bc[,c('Run','library','hh')], by = c('iso1' = 'Run')) %>%
+  left_join(meta_bc[,c('Run','library','hh')], by = c('iso2' = 'Run')) %>%
+  dplyr::rename(sample_name.x = library.x, sample_name.y= library.y,house.x = hh.x, house.y = hh.y) %>%
+  mutate(pair_id = case_when(sample_name.x == sample_name.y ~ 'Sample',
+                             house.x == house.y ~ 'Household',
+                             TRUE ~ 'Outside household'))
+table(d_long2$pair_id) 
+
+# 'BC10-Mtb118' missing
+# Look at single pair - distance of 21, though supposed to be in single house
+d_long2 %>% 
+  filter(sample_name.y == 'BC12-Mtb022' & sample_name.x == 'BC11-Mtb441')
+  
+# Histogram of pairwise SNP distances--include all. 
+d_long2 %>% 
+  ggplot(aes(x = dist, fill = pair_id)) + 
+  geom_histogram() +
+  facet_grid(~pair_id, scales = 'free') + 
+  theme_classic() + 
+  scale_fill_npg(name = 'Comparison type') + 
+  xlab('Pairwise SNP distance')
+
+# Read in fastas, get pairwise distances
+fasta_file4 <- here('results/fasta/walker_PPEmask_snps.fa')
+f4 <- read.dna(file = fasta_file4, format = 'fasta')
+d4 <- dist.dna(f4, model = 'N', as.matrix = TRUE, pairwise.deletion = TRUE)  
+
+meta_walker_file = here('metadata/walker.csv')
+meta_walker = read_csv(meta_walker_file)
+
+# Distances 
+d_long4 <- d4 %>% 
+  melt_dist() %>% 
+  rowwise() %>%
+  mutate(pair_name = paste(sort(c(iso1,iso2)), collapse = '_')) %>%
+  # Remove duplicates--already done
+  group_by(pair_name) %>% slice(1) %>%
+  left_join(meta_walker %>% 
+              dplyr::select(pair_name, epi_link,epi_connection), by = 'pair_name') %>%
+  dplyr::mutate(pair_id = case_when(iso1 == iso2 ~ 'Sample',
+                                    #epi_connection == 'Household / family' ~ 'Household or Linked',
+                                    epi_link == 'Yes' ~ 'Linked',     
+                                    TRUE ~ 'Unlinked'))
+
+table(d_long4$pair_id)
+
+d_long4 %>% 
+  ggplot(aes(x = dist, fill = pair_id)) + 
+  geom_histogram() +
+  facet_wrap(~pair_id, scales = 'free') + 
+  theme_classic() + 
+  scale_fill_npg(name = 'Comparison type') + 
+  xlab('Pairwise SNP distance')
+
+# Combine into a single plot
+d_all = bind_rows(d_long1 %>% mutate(study = 'Colangeli'), 
+                  d_long2 %>% mutate(study = 'Guthrie'),
+                  d_long4 %>% mutate(study = 'Walker')) %>% 
+   mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id))
+         
+table(d_all$pair_id)
+
+# Plot all together: need to use facet_wrap to free the y-axis. 
+p_dists = ggplot(d_all, aes(x = dist, fill = pair_id, )) + 
+  geom_histogram() +
+  facet_wrap(vars(study, pair_id), scales = 'free', nrow = 3) + 
+  theme_classic() + 
+  scale_fill_npg(name = 'Comparison type') + 
+  xlab('Pairwise SNP distance') 
+
+# update scales so that each row shares an x-axis. (Need to first set scales as free, then define limits.)
+p_dists = p_dists + 
+  facetted_pos_scales(
+    x = list(
+      pair_id == "Household" ~ scale_x_continuous(limits = c(0,22), breaks = c(0,5,10,15,20), labels = c(0,5,10,15,20)),
+      pair_id == "Unlinked" ~ scale_x_continuous(limits = c(0,2000), breaks = c(0,500,1000,1500,2000), labels = c(0,500,1000,1500,2000))
+    )
+  )
+
+# Look at proportion of epidemiologically linked pairs that don't fall under threshold. 
+d_all %>%
+  #group_by(study) %>%
+  ungroup() %>%
+  filter(pair_id == 'Household') %>%
+  mutate(meets_threshold5 = case_when(dist <= 5 ~ TRUE, TRUE ~ FALSE), 
+         meets_threshold12 = case_when(dist <= 12 ~ TRUE, TRUE ~ FALSE)) %>%
+  summarize(n() - sum(meets_threshold5), n(), 1-sum(meets_threshold5)/n(), n() - sum(meets_threshold12), 1-sum(meets_threshold12)/n(), n())
+```
+```{r iqtree}
+#### Plot IQTrees ####
+tre1 = read.tree(here('results/tree/vitoria_GTR.treefile'))
+tre2 = read.tree(here('results/tree/bc_GTR.treefile'))
+tre3 = read.tree(here('results/tree/walker_GTR.treefile'))
+
+# Re-arrange meta_vitoria to per-sample
+meta_vitoria_tre = meta_vitoria %>%
+  mutate(hh=row_number()) %>%
+  select(Run.x,Run.y, hh) %>%
+  pivot_longer(cols = c(Run.x,Run.y)) %>%
+  select(-name) %>%
+  relocate(value)
+
+# Color tips by household membership. 
+# Add treescale -- not complete
+p1 = ggtree(tre1, layout="unrooted") %<+%
+  meta_vitoria_tre +
+  geom_tippoint(aes(color = as.factor(hh))) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = rainbow_hcl(25))
+
+# Re-arrange meta_bc to per-sample
+meta_bc_tre <- meta_bc %>% 
+  relocate(Run)
+
+p2 = ggtree(tre2, layout="unrooted") %<+%
+  meta_bc_tre +
+  geom_tippoint(aes(color = as.factor(hh))) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = rainbow_hcl(12))
+
+# Re-arrange meta_lee to per-sample
+meta_walker_tre <- meta_walker %>% 
+  mutate(epi_link = case_when(epi_link == 'Yes' ~ row_number(), 
+                        TRUE ~ NA)) %>% 
+  select(run_accession.x, run_accession.y,epi_link) %>%
+  pivot_longer(cols = c(run_accession.x,run_accession.y)) %>%
+  relocate(value) %>%
+  select(-name)
+
+p3 = ggtree(tre3, layout = 'unrooted') %<+%
+  meta_walker_tre +
+  geom_tippoint(aes(color = as.factor(epi_link))) +
+  theme(legend.position = "none") 
+p3 = p3 +
+  scale_color_manual(values = rainbow_hcl(11), na.translate = FALSE)
+p3
+
+p_tre = plot_grid(p1,p2,p3, nrow = 3)
+
+# Combine trees and snp distances. 
+p_dists_tre = plot_grid(p_dists, p_tre, nrow = 1, labels = 'auto', rel_widths = c(1, .5))
+ggsave(p_dists_tre, filename = here('plots/p_dist_tre.pdf'), width = 12, height = 8)
+```
+```{r shared iSNV summaries}
+
+# Read in shared iSNV summaries
+shared_snps_summary_vitoria = read_csv(here('results/processed/shared_snps_summary_vitoria.csv')) %>%
+  mutate(study = 'Colangeli')
+shared_snps_summary_bc= read_csv(here('results/processed/shared_snps_summary_bc.csv')) %>%
+  mutate(study = 'Guthrie')
+shared_snps_summary_walker = read_csv(here('results/processed/shared_snps_summary_walker.csv')) %>%
+  mutate(study = 'Walker')
+
+shared_snps_summary = bind_rows(shared_snps_summary_vitoria, shared_snps_summary_bc, shared_snps_summary_walker)
+
+```
+```{r shared iSNV boxplot}
+# Filter shared snps to those with expected depth, outside PPE genes
+shared_snps_filtered = shared_snps_summary %>%
+  filter(dp_flag == "Expected" & ppe_flag == 'Outside') %>%
+  mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id), 
+         ppe_flag = case_when(ppe_flag == 'Outside' ~ 'Outside PE/PPE genes', 
+                              TRUE ~ ppe_flag)) %>%
+  mutate(pair_id = factor(pair_id, levels = c('Sample','Household','Linked','Outside household','Unlinked'))) 
+
+# Plot shared variants
+p1 = shared_snps_filtered %>% 
+  filter(threshold == .01) %>% ungroup() %>%
+  mutate(n = n+1) %>%
+  ggboxplot(x = 'study', y = 'n', color = 'pair_id', palette = 'jco', 
+              add = "jitter") + 
+   theme_classic() +
+   scale_y_continuous(trans='log10') +
+   theme(axis.text.x = element_text(angle = 45, vjust = .6)) + 
+   ylab('Minority variants') + 
+   scale_color_jco(name ="Comparison type") 
+p1
+
+ggsave(p1, filename = here('plots/shared_isnvs_logscale.pdf'),
+      bg = 'transparent', height = 6, width = 8)
+
+# Apply a more conservative minor allele frequency threshold
+p2 = shared_snps_filtered %>% 
+  filter(threshold %in% c(.01,.05,.1)) %>%
+   ggboxplot(x = 'threshold', y = 'n', color = 'pair_id', palette = 'jco') + 
+   facet_wrap(~study, scales = 'free_x') + #scales = 'free_x'
+   theme_classic() +
+   scale_y_continuous(trans='log10') +
+   theme(axis.text.x = element_text(angle = 45, vjust = .6)) + 
+   ylab('Minority variants') + 
+   scale_color_jco(name ="Comparison type")
+
+p2
+
+ggsave(p2, filename = here('plots/shared_isnvs_logscale_mafs.pdf'),
+     bg = 'transparent', height = 6, width = 8)
+
+```
+```{r shared iSNV table}
+# Summarize into table--round, order the pair_ids, reformat to make prettier
+tab = shared_snps_filtered %>% 
+  group_by(study,pair_id) %>% 
+  rename('Comparison type' = pair_id) %>%
+  filter(threshold == .01) %>%
+  dplyr::summarize(mean = mean(n), median = median(n),
+                   lower = quantile(n, c(.25, .75))[1],
+                   upper = quantile(n, c(.25, .75))[2]) %>%
+  dplyr::mutate_at(vars(mean, median, lower, upper), signif, digits = 2) %>%
+  gt::gt()
+tab
+gt::gtsave(tab, filename = here('plots/tab1.pdf')) # remove pair_id
+
+# Percentage in PE/PPE genes
+shared_snps_summary %>% 
+  group_by(study,ppe_flag, pair_id) %>% 
+  mutate(pair_id = factor(pair_id, levels = c('Sample','Household','Linked','Sublineage','Outside household','Unlinked','Outside sublineage'))) %>%
+  rename('Comparison type' = pair_id) %>%
+  filter(threshold == .01 & dp_flag == 'Expected' & `Comparison type` == 'Sample') %>%
+  ungroup() %>% group_by(study,ppe_flag) %>% 
+  summarize(n = mean(n)) %>%
+  mutate(freq = n / sum(n))
+
+# Statistical test for variation in mean iSNVs in household pairs versus random pairs, grouped by study
+sample_snps_filt = shared_snps_filtered %>% 
+  group_by(study,pair_id) %>% 
+  filter(threshold == .01 & dp_flag == 'Expected' & pair_id != 'Sample') 
+
+compare_means(data = sample_snps_filt, formula = n ~ pair_id, method = 'wilcox.test', group.by = 'study') # significant for all three studies
+
+# Statistical test for variation in mean iSNVs per-sample across studies
+sample_snps_filt = shared_snps_summary %>% 
+  group_by(study,ppe_flag, pair_id) %>% 
+  mutate(pair_id = factor(pair_id, levels = c('Sample','Household','Linked','Sublineage','Outside household','Unlinked','Outside sublineage'))) %>%
+  filter(threshold == .01 & dp_flag == 'Expected' & ppe_flag == 'Outside' & pair_id == 'Sample') 
+
+compare_means(data = sample_snps_filt, n ~ study, method = 'wilcox.test') # higher levels of variaiton in Colangelli compared to Guthrie or Walker.
+
+```
+
+```{r rocr}
+
+# AUC curves
+p_roc = shared_snps_summary %>% 
+  group_by(study, threshold) %>% 
+  mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id), 
+         threshold = as.factor(threshold)) %>%
+  filter(pair_id != 'Sample'& dp_flag == 'Expected' & ppe_flag == 'Outside') %>%
+  mutate(truth = factor(pair_id)) %>% rename(n_isnvs = 'n') %>%
+  roc_curve(truth = truth, n_isnvs) %>% 
+  # autoplot(aes(group = threshold, col = threshold)) +
+  ggplot(aes(x = 1 - specificity, y = sensitivity, group = threshold, col = threshold)) + 
+  geom_line() +
+  theme_bw() +
+  facet_wrap(vars(study)) +
+  geom_abline(slope=1, intercept = 0, linetype="dotted") +
+  scale_color_viridis_d(name = 'MAF threshold')
+
+# Save
+# ggsave(p_roc, width = 8, height = 3, filename = here(paste0(plot_dir, 'roc.pdf')))
+
+# Print AUCs
+shared_snps_summary %>% 
+  group_by(study, threshold) %>% 
+  mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id)) %>%
+  filter(pair_id != 'Sample'& dp_flag == 'Expected' & ppe_flag == 'Outside') %>%
+  mutate(truth = factor(pair_id)) %>% rename(n_isnvs = 'n') %>%
+  roc_auc(truth, n_isnvs) %>%
+  # Get the threshold that maximizes AUC
+  group_by(study) %>%
+  arrange(study, -.estimate)
+
+d_all_full = shared_snps_summary %>% 
+  group_by(study, threshold) %>% 
+  mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id), 
+         threshold = as.factor(threshold)) %>%
+  filter(pair_id != 'Sample'& dp_flag == 'Expected' & ppe_flag == 'Outside' & threshold == .01) %>%
+  mutate(hh = case_when(pair_id == 'Household' ~ 1, 
+                        pair_id == 'Unlinked' ~ 0, TRUE ~ NA)) %>% 
+  rename(n_isnvs = 'n') %>%
+  # Join with genetic distances between samples
+  left_join(d_all) %>%
+  ungroup() %>% group_by(study) %>%
+  # Get the z-score for iSNVs
+  mutate(n_isnvsZ = scale(n_isnvs), 
+         distZ = scale(dist))
+    
+# Logistic regression for household membership. When including consensus sequence dists: fitted probabilities numerically 0 or 1 occurred.
+m1 = glm(data = d_all_full[d_all_full$study == 'Colangelli',], formula = hh ~ n_isnvsZ, family = "binomial")
+summary(m1)
+cbind(exp(coefficients(m1)),exp(confint(m1)))
+
+m2 = glm(data = d_all_full[d_all_full$study == 'Guthrie',], formula = hh ~ n_isnvsZ, family = "binomial")
+summary(m2)
+cbind(exp(coefficients(m2)),exp(confint(m2)))
+
+m3 = glm(data = d_all_full[d_all_full$study == 'Walker',], formula = hh ~ n_isnvsZ, family = "binomial")
+summary(m3)
+cbind(exp(coefficients(m3)),exp(confint(m3)))
+
+# Compare pair-wise distance with number of shared iSNVs
+p_dist_isnvs = d_all_full %>% 
+  ggscatter(y = 'n_isnvs', x = 'dist', color = 'study',palette = 'jco') + 
+            #facet.by = c('pair_id','study'), scales = 'free_x' ) +
+  facet_grid(cols = vars(pair_id), rows = vars(study), scales = 'free') + 
+  stat_cor(method = "pearson", size = 3) + 
+  theme_classic() +
+  ylab('Number shared iSNVs') + xlab('Distance between consensus sequences')
+p_dist_isnvs
+
+```
+
+```{r maf}
+#### Plot MAF across all samples ####
+snps_vitoria = read_csv(here('results/processed/vitoria_snps.csv')) %>%
+mutate(study = 'Colangeli')
+snps_vitoria = snps_vitoria %>%
+filter(Sample %in% unique(snps_vitoria$Sample)[1:10])
+snps_bc = read_csv(here('results/processed/bc_snps.csv')) %>%
+mutate(study = 'Guthrie')
+snps_bc = snps_bc %>%
+filter(Sample %in% unique(snps_bc$Sample)[1:10])
+
+snps_walker = read_csv(here('results/processed/walker_snps.csv')) %>%
+mutate(study = 'Walker')
+snps_walker = snps_walker %>%
+filter(Sample %in% unique(snps_walker$Sample)[1:10])
+
+# Include the first 5 samples that appear in the data.
+snps_hh = bind_rows(snps_vitoria,snps_bc,snps_walker) %>%
+mutate(study = factor(study, levels = c('Colangeli','Guthrie','Walker')),
+ppe_flag = case_when(ppe_flag == 'Outside' ~ 'Outside PE/PPE genes',
+TRUE ~ ppe_flag)) %>%
+  filter(!dp_flag == 'Low depth') 
+
+p0 = snps_hh %>%
+ggplot(aes(y = Sample, x = maf, fill = study)) +
+#scale_x_continuous(trans=scales::pseudo_log_trans(base = 10)) +
+geom_density_ridges2(rel_min_height = 0.01) +
+theme_classic() + theme(axis.text.y=element_blank()) +
+xlab('Minor allele frequency') +
+facet_wrap(~ppe_flag) +
+scale_fill_aaas() +
+coord_cartesian(xlim = c(0,.5)) 
+
+p0
+ggsave(p0, filename = here('plots/maf.pdf'), height = 6, width = 6.5, bg = 'transparent')
+```
+
+```{r stacked bar}
+#### Shared iSNVs stacked barplot ####
+# Stacked barplot
+p_stacked_bar <- shared_snps_summary %>% 
+  filter(threshold == .01 & ppe_flag == 'Outside' & dp_flag == 'Expected') %>%
+  mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id)) %>%
+  arrange(-n) %>%
+  mutate(shared = case_when(
+    n >= 10 ~ '10+',
+    n >= 5 & n <= 9~ '5-9',    
+    n >= 2 & n <= 4~ '2-4',
+    n == 1 ~ '1',
+    n == 0 ~ '0'), 
+    shared = factor(shared, levels = c('0','1','2-4','5-9','10+')),
+    pair_id = factor(pair_id, levels = c('Sample','Household','Unlinked'))) %>% 
+  select(pair_id, shared, study) %>% 
+  group_by(pair_id, shared, study) %>%
+  dplyr::summarize(n = n()) %>%
+  ggplot(aes(x = pair_id,y = n,fill = shared)) +
+  geom_bar(position = "fill", stat = "identity") + 
+  facet_wrap(~study) + 
+  scale_fill_viridis_d(name = 'Shared iSNVs') + theme_classic() + xlab('Comparison type') + ylab('Proportion pairwise comparisons') + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) + 
+  theme(plot.margin = unit(c(0,0,0,0), "lines")) + 
+  theme(
+    panel.background = element_rect(fill='transparent'), #transparent panel bg
+    plot.background = element_rect(fill='transparent', color=NA), #transparent plot bg
+    panel.grid.major = element_blank(), #remove major gridlines
+    panel.grid.minor = element_blank(), #remove minor gridlines
+    legend.background = element_rect(fill='transparent', color = NA), #transparent legend bg
+    legend.box.background = element_rect(fill='transparent', color = NA), #transparent legend panel
+    strip.background = element_rect(fill='transparent') 
+  )
+p_stacked_bar
+
+ggsave(p_stacked_bar, filename = here('plots/shared_isnvs_stacked_bar.pdf'), 
+       bg = 'transparent', height = 6, width = 8)
+
+# Combine stacked barplot and ROC curve
+p_roc_leg = get_legend(p_roc)
+p_roc_noleg = p_roc + theme(legend.position="none")
+p_stacked_bar_leg = get_legend(p_stacked_bar)
+p_stacked_bar_noleg = p_stacked_bar + theme(legend.position="none")
+
+# Combine
+p_roc_bar = plot_grid(p_roc, p_stacked_bar, labels = c('a', 'b'), nrow = 2, 
+          label_size = 12)
+
+ggsave(p_roc_bar, filename = here('plots/roc_stacked_bar.pdf'), 
+       bg = 'transparent', height = 8, width = 6)
+```
+
+```{r SI plots: maf vs. site depth}
+# maf vs. site depth
+p_maf_vs_depth = snps_hh %>%
+  filter(!(dp_flag == 'Low depth' | ppe_flag == "PE/PPE")) %>%
+  ggscatter(y = 'maf', x = 'DP', color = 'study',palette = 'jco', scales = 'free') +
+  stat_cor(method = "pearson", label.y = .4, size = 3) +
+  facet_wrap(~study, scales = 'free_x') +
+  theme_classic() +
+  ylab('Minor allele frequency') + xlab('Site depth of coverage')
+p_maf_vs_depth
+
+# Number of iSNVs per sample vs. median depth -- need to combine w/ metadata for median coverage!
+# Here. Something weird is going on with depth in pipeline.
+shared_snps_filtered %>%
+  filter(threshold == .01 & study == 'Colangeli' & pair_id == 'Sample') %>%
+  rowwise() %>%
+  mutate(Sample = str_split(pair_name,'_', simplify = TRUE)[1]) %>%
+  left_join(vitoria_run_summary) %>%
+  ggscatter(x = 'Coverage_Mean', y = 'n') +
+   stat_cor(method = "pearson", label.y = .4, size = 3) +
+  facet_wrap(~study, scales = 'free_x') +
+  theme_classic() 
+
+shared_snps_filtered %>%
+  filter(threshold == .02 & study == 'Walker' & pair_id == 'Sample' & n < 200) %>%
+  rowwise() %>%
+  mutate(Sample = str_split(pair_name,'_', simplify = TRUE)[1]) %>%
+  left_join(walker_run_summary) %>%
+  ggscatter(x = 'Coverage_Mean', y = 'n') +
+   stat_cor(method = "pearson", label.y = .4, size = 3) +
+  facet_wrap(~study, scales = 'free_x') +
+  theme_classic() 
+
+p_maf_vs_depth = snps_hh %>%
+  filter(!(dp_flag == 'Low depth' | ppe_flag == "PE/PPE")) %>%
+  ggscatter(y = 'maf', x = 'DP', color = 'study',palette = 'jco', scales = 'free') +
+  stat_cor(method = "pearson", label.y = .4, size = 3) +
+  facet_wrap(~study, scales = 'free_x') +
+  theme_classic() +
+  ylab('Minor allele frequency') + xlab('Site depth of coverage')
+p_maf_vs_depth
+
+
+shared_snps_summary %>% 
+  group_by(study, threshold) %>% 
+  mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
+                             pair_id == 'Outside household' ~ 'Unlinked', 
+                             TRUE ~ pair_id), 
+         threshold = as.factor(threshold)) %>%
+  filter(pair_id != 'Sample'& dp_flag == 'Expected' & ppe_flag == 'Outside') %>%
+  mutate(truth = factor(pair_id)) %>% rename(n_isnvs = 'n')
+
+p_maf_hh = shared_snps_summary  %>%
+  mutate(study = factor(study, levels = c('Colangelli','Guthrie','Walker')),
+  ppe_flag = case_when(ppe_flag == 'Outside' ~ 'Outside PE/PPE genes',
+TRUE ~ ppe_flag)) %>%
+  ggscatter(y = 'maf', x = 'DP', color = 'study',palette = 'jco') +
+  stat_cor(method = "pearson", label.y = .4, label.x = 250, size = 3) +
+  facet_wrap(~study) +
+  theme_classic() +
+  ylab('Minor allele frequency') + xlab('Site depth of coverage')
+p_maf_vs_depth
+  
+```
+
+```{r SI plots: correlation of mafs}
+
+vitoria_shared = read_csv(here('results/processed/vitoria_shared_snps_ann.csv')) %>%
+  mutate(study = 'Colangeli')
+bc_shared = read_csv(here('results/processed/bc_shared_snps_ann.csv')) %>%
+  mutate(study = 'Guthrie')
+walker_shared = read_csv(here('results/processed/walker_shared_snps_ann.csv')) %>%
+  mutate(study = 'Walker')
+
+# Read in shared SNPs to look at maf correlations
+p_maf_corr = vitoria_shared  %>%
+  bind_rows(bc_shared) %>%
+  bind_rows(walker_shared) %>% 
+  filter(ppe_flag == "Outside" & dp_flag == "Expected" & pair_id == 'Household' & maf.x >= .01 & maf.y >= .01) %>% 
+  ggscatter(x = 'maf.x', y = 'maf.y', facet.by = 'study',
+  add = "reg.line", add.params = list(color = "blue", fill = "lightgray",
+   conf.int = TRUE, cor.coef = TRUE)) + 
+  stat_cor(method = "pearson", label.x = .26, label.y = .44, size = 3) +
+  xlab('Minor allele frequency, isolate 1') + 
+  ylab('Minor allele frequency, isolate 2')
+
+ggsave(p_maf_corr, filename = here('plots/maf_corr.pdf'), height = 6, width = 10)
+
+# Remove large files
+rm(bc_shared,vitoria_shared,walker_shared)
+```
+```{r SI plot: variant effect }
+
+snps_hh %>%
+  separate_wider_delim(ANN, delim = '|', names = c('allele','effect','putative_impact','gene_name','gene_id','feature_type','feature_id',NA,NA,'HGVS.c','HGVS.p'), too_many = 'drop',too_few = 'align_start')  %>%   
+  filter(ppe_flag == "Outside PE/PPE genes" & dp_flag == "Expected" & maf >= .01) %>%
+  filter(effect %in% c('missense_variant','intergenic_region','synonymous_variant')) %>%
+  group_by(POS, effect, study) %>% dplyr::summarize(n = n()) %>%
+  ggplot(aes(x = n, fill = effect), show.legend = FALSE) + 
+  geom_histogram() +    
+  facet_grid(rows = vars(effect), cols = vars(study), scales = 'free_y') + theme_classic() + 
+  scale_fill_jco() + theme(legend.position = "none") + 
+  xlab('Number of samples with mutation')
+
+# Which were most common sites across all three studies? 
+snps_hh %>%
+  separate_wider_delim(ANN, delim = '|', names = c('allele','effect','putative_impact','gene_name','gene_id','feature_type','feature_id',NA,NA,'HGVS.c','HGVS.p'), too_many = 'drop',too_few = 'align_start')  %>%   
+  filter(ppe_flag == "Outside PE/PPE genes" & dp_flag == "Expected" & maf >= .01) %>%
+  #filter(effect %in% c('missense_variant','intergenic_region','synonymous_variant')) %>%
+  group_by(POS, effect) %>% 
+  dplyr::summarize(n = n()) %>% arrange(-n)
+
+snps_hh %>%
+    filter(ppe_flag == "Outside PE/PPE genes" & dp_flag == "Expected" & maf >= .01 & POS == 580772)
+
+# How many minority variants are stop gained or stop lost
+"stop_gained"
+snps_hh %>%
+  separate_wider_delim(ANN, delim = '|', names = c('allele','effect','putative_impact','gene_name','gene_id','feature_type','feature_id',NA,NA,'HGVS.c','HGVS.p'), too_many = 'drop',too_few = 'align_start')  %>%   
+  filter(ppe_flag == "Outside PE/PPE genes" & dp_flag == "Expected" & maf >= .01) %>%
+  group_by(effect) %>% dplyr::summarize(n = n()) %>% arrange(-n) %>% 
+  summarize(sum(n))
+  
+```
+```{r SI plot: time between sample collection vs. shared variants}
+# Colangelli et al. samples
+shared_snps_summary %>% 
+  filter( pair_id == 'Household' & ppe_flag == 'Outside' & dp_flag == 'Expected' & study == 'Colangelli') %>%
+  dplyr::left_join(meta_vitoria, by = 'pair_name') %>% 
+  ggplot(aes(x = months, y = n)) + geom_point() + theme_classic() + 
+  stat_cor(p.accuracy = 0.001, r.accuracy = 0.01)+
+  facet_wrap(~threshold, scales = 'free_y') + geom_smooth(method = "lm") + 
+  xlab('Months between sampling of index & household contact') +
+  ylab('Shared minority variants')
+
+```
+
+```{r capture}
+# Read in capture metadata
+meta_capture_full = read_csv(file = here('metadata/capture.csv'))
+
+# Read in capture snps
+capture_snps_table_file = here('results/processed/capture_snps.csv')
+capture_snps = read_csv(capture_snps_table_file)
+
+# Confirm all samples have corresponding metadata
+#unique(capture_snps$Sample)[which(!unique(capture_snps$Sample) %in% meta_capture$experiment_accession)]
+
+# Summarize iSNVs per sample & beeswarm by study and method
+capture_filt <- capture_snps %>%
+  filter(!(dp_flag == 'Low depth') & AD1 >= 5 & AD2 >= 5) %>%
+  filter(ppe_flag == 'Outside') %>%
+  left_join(meta_capture_full, by = c('Sample' = 'experiment_accession')) %>%
+  filter(Coverage_Median >= 25) %>%
+  group_by(Sample, ppe_flag, Approach, study, smear, Patient, Coverage_Median) %>%
+  summarize(n_isnvs = n()) %>%
+  mutate(smear = factor(smear, levels = c('negative','scanty','1+','2+','3+')),
+    Approach = factor(Approach, levels = c('culture','lysis','BAL capture','culture capture','sputum capture')), 
+    Patient = paste0(study,Patient))
+
+# Plot by approach, compare to reference
+capture_filt %>% 
+  ggboxplot(x = 'Approach', y = 'n_isnvs', color = 'Approach', palette = 'jco', add = 'jitter') + 
+  facet_wrap(~study, scales = 'free_x') + #scales = 'free_x'
+  theme_classic() +
+  scale_y_continuous(trans='log10') +
+  theme(axis.text.x = element_text(angle = 45, vjust = .6)) + 
+  ylab('Minority variants')
+
+# Compare means against reference group (culture) - none significantly differed from culture
+compare_means(data = capture_filt, n_isnvs ~ Approach, group.by = 'study', ref.group = 'culture', method = 'wilcox.test')
+
+# Paired plots
+capture_filt %>% ungroup() %>% 
+  group_by(study, Patient) %>% filter(n() > 1) %>% #ungroup() %>%
+  arrange(study, Approach, Patient) %>% 
+  #filter(study == 'Goig') %>%
+  ggpaired(x = 'Approach', y = 'n_isnvs', id = 'Patient', color = 'Approach', palette = 'jco',line.color = 'gray', line.size = 0.4, 
+           facet.by = 'study',  scales = "free_x") + 
+  theme_classic() +
+  scale_y_continuous(trans='log10') +
+  theme(axis.text.x = element_text(angle = 45, vjust = .6)) + 
+  ylab('Number iSNVs') 
+  
+# Compare means against reference group (culture) - none significantly differed from culture
+brown_df = capture_filt %>% filter(study == 'Brown') %>% ungroup() %>% group_by(study, Patient) %>% filter(n() > 1) %>%
+  arrange(study, Approach, Patient) %>%
+  mutate(comparison_group = paste0(sort(unique(Approach)), collapse = '_'))
+
+compare_means(data = brown_df, n_isnvs ~ Approach, id = 'Patient', method = "wilcox.test", paired = TRUE, group.by = 'comparison_group')
+
+doyle_df = capture_filt %>% filter(study == 'Doyle') %>% ungroup() %>% group_by(study, Patient) %>% filter(n() > 1) %>%
+  arrange(study, Approach, Patient) %>%
+  mutate(comparison_group = paste0(sort(unique(Approach)), collapse = '_'))
+compare_means(data = doyle_df, n_isnvs ~ Approach, id = 'Patient', method = "wilcox.test", paired = TRUE, group.by = 'comparison_group')
+
+goig_df = capture_filt %>% filter(study == 'Goig') %>% group_by(study, Patient) %>% filter(n() > 1) %>%
+  arrange(study, Approach, Patient) %>%
+  mutate(comparison_group = paste0(sort(unique(Approach)), collapse = '_'))
+compare_means(data = goig_df, n_isnvs ~ Approach, id = 'Patient', method = "wilcox.test", paired = TRUE, group.by = 'comparison_group')
+
+vot_df = capture_filt %>% filter(study == 'Votintseva') %>% group_by(study, Patient) %>% filter(n() > 1) %>%
+  arrange(study, Approach, Patient) 
+compare_means(data = vot_df, n_isnvs ~ Approach, id = 'Patient',method = "wilcox.test", paired = TRUE)
+
+capture_filt %>% filter(!study == 'Votintseva') %>%
+  ggboxplot(x = 'smear', y = 'n_isnvs', color = 'smear', palette = 'jco', add = 'jitter') + 
+  facet_wrap(~study, scales = 'free_x') + #scales = 'free_x'
+  theme_classic() +
+  scale_y_continuous(trans='log10') +
+  theme(axis.text.x = element_text(angle = 45, vjust = .6)) + 
+  ylab('Minority variants')
+
+
+```
+```{r regression for minority variants}
+# Poisson regression for # iSNVs
+
+m1 = glm(n_isnvs ~ study + Approach + smear + Coverage_Median, data = capture_filt, family = poisson)
+summary(m1)
+cbind(exp(coefficients(m1)),exp(confint(m1)))
+
+# Drop smear status as Votintseva does not report
+m2 = glm(n_isnvs ~ study + Approach + Coverage_Median, data = capture_filt, family = poisson)
+summary(m2)
+cbind(exp(coefficients(m2)),exp(confint(m2)))
+
+# Predict model 1 output
+newdata1 <- expand.grid(Approach = unique(capture_filt$Approach), Coverage_Median = seq(0,500, by = 50)) %>%
+  mutate(study = 'Brown', smear = '1+')
+newdata1 <- cbind(newdata1, predict(m1, newdata = newdata1,type = "response", se = TRUE))
+
+# Plot model predictions
+ggplot(newdata1, aes(x = Coverage_Median, y = fit)) + 
+  geom_ribbon(aes(ymin = fit - se.fit,
+    ymax = fit + se.fit, fill = Approach), alpha = 0.2) + 
+  geom_line(aes(colour = Approach),size = 1) + 
+  xlab('Coverage') + ylab('Predicted minority variants') +
+  theme_classic()
+
+# Report increase from 50 to 100X coverage
+newdata1 %>% 
+  filter(Coverage_Median %in% c(50,100,200) & Approach == 'sputum capture')
+
+# GOF
+1-pchisq(m1$deviance, m1$df.residual)
+
+# Random intercept, including pair (needs to also include)-no convergence, not reported.
+m2 = glmer(n_isnvs ~ study + Approach + smear + Coverage_Median + (1 | Patient),  data = capture_filt, 
+           family = poisson(link = "log"))
+summary(m2)
+cbind(exp(coefficients(m2)),exp(confint(m2)))
+
+```
+
+```{r troubleshooting}
+#### Troubleshooting large distances - resolved, must have concatenated incorrect fastas. ####
+shared_snps_table_bc_ann %>%
+  filter(pair_name == 'SRR639809_SRR6397994') %>%
+  filter(GT.x != GT.y)  #
+
+## Look at fixed snps in BC data--why are they so large??? does this have to do with variants only output issue? 
+# No, these look like true fixed differences. 
+# Look 
+# Problem is that filters are applied differently. Lee included only sites with good coverage in all 
+# I don't think lowDepth/lowCoverage filters are being applied in the fasta step. 
+
+tmp = read.dna('/uufs/chpc.utah.edu/common/home/walter-group2/tb/hh/test/tmp.fa', format = 'fasta')
+dist.dna(tmp)
+tmp2 = read.dna('/uufs/chpc.utah.edu/common/home/walter-group2/tb/hh/results/fasta/bc_PPEmask_snps2.fa', format = 'fasta')
+d2=dist.dna(tmp2, model = 'N', as.matrix = TRUE)
+d2['SRR6397994','SRR6398092']
+```
+```{r goig--old}
+#### Goig shared iSNVs ####
+shared_snps_summary_goig = read_csv(shared_snps_summary_goig, file = 'results/processed/shared_snps_summary_goig.csv', col_types = c('ccdcci'))
+
+shared_snps_summary_goig %>%
+  #mutate(pair_id = factor(pair_id, levels = c('Sample','Household','Linked','Sublineage','Outside household','Unlinked','Outside sublineage'))) %>%
+  filter(threshold == .01 & ppe_flag == 'Outside' & dp_flag == 'Expected') %>%
+  ggplot(aes(x = pair_id, y = n + 1, color = pair_id)) +
+  geom_quasirandom() +
+  facet_grid(cols = vars(ppe_flag,dp_flag), scales = 'free') 
+
+# Add individual id to meta_data
+meta_goig_plot = meta_goig %>%
+  mutate(id = case_when(!is.na(Matched_Culture_Accession) ~ row_number(), 
+         TRUE ~ NA)) %>%
+  select(Run,Matched_Culture_Accession,id) %>% 
+  pivot_longer(cols = c(Run,Matched_Culture_Accession)) %>%
+  filter(!is.na(id)) %>%
+  mutate(pair_name = paste0(value, '_',value))
+
+# List of samples that have a match. 
+samps = meta_goig %>% filter(!is.na(Matched_Culture_Accession)) %>%
+  select(Run,Matched_Culture_Accession) %>% as.vector() 
+samps = c(samps$Run,samps$Matched_Culture_Accession)
+pair_names = paste0(samps, '_',samps)
+
+pd <- position_dodge(0.5)
+shared_snps_summary_goig %>% 
+  filter(pair_name %in% pair_names & threshold == .01 & ppe_flag == 'Outside' & dp_flag == 'Expected') %>% 
+  mutate(pair_id = factor(pair_id, levels = c('Culture', 'Bait capture','Direct sequencing'))) %>%
+  left_join(meta_goig_plot, by = 'pair_name') %>%
+  ggplot(aes(x = pair_id, y = n, color = pair_id, group = id)) +
+  geom_line(position = pd) +
+  geom_point(position = pd) +
+  theme_classic() +
+  ylab('Number of within-host iSNVs') +
+  scale_color_aaas(name = '') + 
+  theme(axis.title.x = element_blank()) 
+
+# Paired t-test of difference in iSNVs in culture vs. Bait capture
+df1 = shared_snps_summary_goig %>% 
+  filter(pair_name %in% pair_names & threshold == .05 & ppe_flag == 'Outside' & dp_flag == 'Expected' & pair_id == 'Culture') %>% 
+  left_join(meta_goig_plot, by = 'pair_name')
+df2 = shared_snps_summary_goig %>% 
+  filter(pair_name %in% pair_names & threshold == .05 & ppe_flag == 'Outside' & dp_flag == 'Expected' & pair_id == 'Bait capture') %>% 
+  left_join(meta_goig_plot, by = 'pair_name')
+
+df1 %>% left_join(df2, by = 'id') %>%
+  mutate(diff = n.x - n.y) %>%
+  t_test(response = diff, mu = 0)
+  
+
+
+shared_snps_summary_goig %>% 
+  group_by(pair_id) %>% 
+  filter(threshold == .05 & dp_flag == 'Expected' & ppe_flag == 'Outside') %>%
+  dplyr::summarize(mean = mean(n), median = median(n),
+                   lower = quantile(n, c(.25, .75))[1],
+                   upper = quantile(n, c(.25, .75))[2]) %>%
+  dplyr::mutate_at(vars(mean, median, lower, upper), signif, digits = 2) 
+```

@@ -1,0 +1,245 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r organize hh studies metadata}
+# Source config file
+library(here)
+source(here('scripts/config.R'))
+here()
+
+#### Organize metadata: Vitoria ####
+
+metadata_file_vitoria <- here('metadata/PRJNA475130_runinfo.csv')
+meta_vitoria <- read_csv(metadata_file_vitoria)
+meta_vitoria$hh <- str_remove(meta_vitoria$LibraryName,"-.*")
+vitoria_hh_info_file <- here('metadata/PRJNA475130_hh_info.csv')
+vitoria_hh_info <- read_csv(vitoria_hh_info_file) 
+names(vitoria_hh_info)[3] = 'months'
+vitoria_hh_info <- vitoria_hh_info %>%
+  mutate(months = str_extract(months, pattern = '(\\d+)[[:punct:]]$'), 
+         months = str_extract(months, pattern = '\\d+'), 
+         months = as.numeric(months))
+
+# Add donor-recipient info to vitoria meta
+vitoria_hh_info <- vitoria_hh_info %>% left_join(meta_vitoria %>% dplyr::select(LibraryName,Run), 
+                                                 by = c(`Index case` = 'LibraryName')) %>%
+  left_join(meta_vitoria %>% dplyr::select(LibraryName,Run), 
+            by = c(HHC = 'LibraryName')) %>%
+  rowwise() %>%
+  mutate(pair_name = paste(sort(c(Run.x,Run.y)), collapse = '_')) 
+
+# Read in variant calling run summary. 
+vitoria_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-03-10_14-36-35.285596.tsv")
+
+# Save
+write_csv(vitoria_hh_info, file = here('metadata/vitoria.csv'))
+```
+```{r bc}
+#### Organize metadata: BC ####
+
+metadata_file_bc <- here('metadata/PRJNA413593_runinfo.csv')
+meta_bc <- read_csv(metadata_file_bc)
+
+# Read in sequencing summary for vitoria
+seq_summary_bc<- read_tsv(paste0(sequencing_dir,'pipeline_run_summary_2023-03-10_14-36-35.285596.tsv'))
+mean(seq_summary_bc$Coverage_Mean)
+mean(seq_summary_bc$Coverage_Median)
+
+# Read in list of hh members for bc
+bc_hh_file <- here('metadata/PRJNA413593_hh_members.csv')
+bc_hh <- read_csv(bc_hh_file)
+
+# Identify accession numbers for household members only from BC study. BC06-Mtb290 and BC06-Mtb296 are in the other sequencing batch
+bc_hh <- bc_hh %>% left_join(meta_bc, by = c("library" = "LibraryName")) 
+
+# Read in variant calling run summary. Don't have this yet.  
+bc_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-07-07_01-28-31.690645.tsv")
+mean(bc_run_summary$Coverage_Mean) 
+length(which(bc_run_summary$Coverage_Mean > 50))
+
+# Save
+write_csv(bc_hh, file = here('metadata/bc.csv'))
+```
+```{r walker}
+#### Organize metadata: Walker ####
+
+# Read in metadata for Walker
+metadata_file_walker = here('metadata/Walker_SI.xlsx')
+
+# Read in genomic data
+walker_meta = readxl::read_excel(metadata_file_walker, sheet = 2) %>% mutate(Patient = str_replace(Patient, "OxTbPat_", "P")) %>%
+  dplyr::rename(ena="ENA\r\naccession number", 
+                year = "Year of diagnosis", 
+                tb_inc_birth = "Incidence in country of birth", epi_cluster = "Epidemiological cluster",
+                wgs_cluster = "WGS cluster")
+
+# Walker filenames
+walker_ena_file = here('metadata/filereport_read_run_PRJEB5162.tsv')
+walker_ena = read_delim(walker_ena_file)
+
+# Add ENA data to metadata
+walker_meta <- walker_meta %>%
+  left_join(walker_ena, by = c('ena'='secondary_sample_accession'))
+
+# Read in epi data
+walker_hh = readxl::read_excel(metadata_file_walker, sheet = 1)
+walker_hh = walker_hh %>% separate(`Reconstructed patient links`, into = c('patient.x','patient.y'),sep = ' - ')
+
+# Add ENA accessions to epi data
+walker_hh = walker_hh %>% 
+  left_join(walker_meta, by = c('patient.x' = 'Patient')) %>% 
+  left_join(walker_meta, by = c('patient.y' = 'Patient')) %>%
+  rowwise() %>%
+  mutate(pair_name = paste(sort(c(run_accession.x,run_accession.y)), collapse = '_')) 
+
+# Rename
+walker_hh = walker_hh %>%
+  dplyr::rename(wgs_cluster = "WGS Cluster",
+                epi_link = "Epidemiologically linked (known to have shared time and space)", 
+                epi_connection = "Epidemiological connection (either confirmed or hypothesised)" )
+walker_hh = walker_hh %>% dplyr::select(-starts_with('tax|sample|experiment|run|study'))
+
+# Read in variant calling run summary. 
+walker_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-07-07_01-28-31.690645.tsv")
+
+# Save
+write_csv(walker_hh, file = here('metadata/walker.csv'))
+
+# Read in sequencing summary
+walker_seq_data = read_tsv(paste0(sequencing_dir,'pipeline_run_summary_2023-07-07_01-28-31.690645.tsv'))
+mean(walker_seq_data$Coverage_Mean)
+mean(walker_seq_data$Coverage_Median)
+
+#### Organize metadata: Lee ####
+metadata_file_lee <- here('metadata/PRJNA549270_runinfo.csv')
+meta_lee <- read_csv(metadata_file_lee)
+table(meta_lee$sublineage)
+
+# Add column to indicate predicted superspreader
+meta_lee <- meta_lee %>% 
+  mutate(predicted_index = case_when(SampleName == 'MT-504' ~ 'superspreader',
+                                     SampleName == 'MT-2474' ~ 'other_source', 
+                                     TRUE ~ NA))
+
+# Save
+write_csv(meta_lee, file = here('metadata/lee.csv'))
+```
+```{r capture studies}
+# Organize metadata for capture studies
+refs=c('PRJEB9206','PRJNA339209','PRJEB21685','PRJEB37609')
+metadata_capture_files = here(paste0('data/', refs, '/metadata/', refs, '.runinfo_ftp.tsv'))
+metadata_goig_files = list.files(here(paste0('data/goig_culture/metadata')),full.names = TRUE)
+
+meta_capture = read_tsv(c(metadata_capture_files, metadata_goig_files), id = "file_name")
+
+# Read in coverage information
+capture_run_summary = "/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/capture_run_summary_2023-10-12_22-45-28.183630.tsv"
+goig_culture_run_summary = "/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/goig_culture_run_summary_2023-11-02_14-06-24.995537.tsv"
+
+capture_run_summary = read_tsv(c(capture_run_summary,goig_culture_run_summary)) %>%
+  mutate(Sample = str_remove(Sample, '.+_'))
+
+# Combine with metadata
+meta_capture = meta_capture %>% left_join(capture_run_summary, by = c('run_accession' = 'Sample'))
+
+# Read in additional Goig metadata from authors
+metadata_file_goig = here('metadata/Goig2020_sputum_matched_cultures.csv')
+meta_goig = read_csv(metadata_file_goig)
+
+# Create list of matched culture SRA accessions from Goig et al. for download
+# meta_goig %>% filter(!is.na(Matched_Culture_Accession)) %>% select(Matched_Culture_Accession) %>% write_csv(here('data/input_goig_culture.csv'), col_names = FALSE)
+
+# Add information about Patient to Goig
+meta_goig = meta_goig %>% mutate(Patient = row_number()) %>%
+  pivot_longer(cols = c(Run, Matched_Culture_Accession),
+                names_to = 'approach', 
+               values_to = 'Run') %>%
+  relocate(Run,approach, AFB_SCORE,Patient) %>%
+  filter(!is.na(Run))
+
+meta_goig = meta_goig %>%
+  mutate_at(vars(AvgSpotLen:Submitter_Id), ~(case_when(approach == 'Matched_Culture_Accession' ~ NA, 
+                                             TRUE ~ .))) %>%
+  mutate(sequencing = case_when(approach == 'Matched_Culture_Accession' ~ 'culture', TRUE ~ sequencing))
+
+# Add information for matched cultures
+#meta_goig_culturesa = read_csv(here('metadata/SraRunInfo_PRJEB29604.csv'))
+#meta_goig_culturesb = read_csv(here('metadata/SraRunInfo_PRJEB38719.csv'))
+
+# Read in Brown metadata
+metadata_file_brown = here('metadata/brown-et-al_table.xlsx')
+meta_brown = readxl::read_excel(metadata_file_brown) 
+meta_brown = meta_brown %>%
+  fill(c(Patient,`Sputum positivity`), .direction = 'down') %>%
+  rename(geneXpert = `Gene-Xpert (TB+/RR+) if measured`) %>%
+  group_by(Patient) %>%
+  fill(geneXpert, .direction = 'down')
+
+# Read in Doyle metadata # update this in the meta capture WH006AW-2
+metadata_file_doyle = here('metadata/doyle-et-al_table.csv')
+meta_doyle = read_csv(metadata_file_doyle)
+
+# Discard Doyle et al. sequence metadata that doesn't correspond to study.
+meta_capture <- meta_capture %>%
+  filter(!(study_accession == 'PRJEB21685' & !sample_title %in% meta_doyle$sample_name))
+
+# Look at Doyle samples
+meta_capture %>% filter(study_accession == 'PRJEB21685') %>%
+ inner_join(meta_doyle, by = c('sample_title' = 'sample_name')) %>% 
+ relocate(library_strategy, sample_title, library_selection, sample_alias, MGIT_prep) %>%
+  select(library_strategy, MGIT_prep) %>%
+  mutate(approach = case_when(library_strategy == 'Targeted-Capture'  ~ 'sputum capture',
+                              library_strategy == 'WGS' & MGIT_prep == 'culture' ~ 'culture',
+                              library_strategy == 'WGS' & MGIT_prep == 'capture' ~ 'culture capture',
+                              TRUE ~ paste0(library_strategy,MGIT_prep, collapse = ''))) 
+                  
+```
+```{r}
+# Add metadata
+meta_capture_full <- meta_capture %>%
+  full_join(meta_goig, by = c('run_accession' = 'Run')) %>%
+  left_join(meta_brown, by = c('sample_title' = 'Sample' )) %>%
+  left_join(meta_doyle, by = c('sample_title' = 'sample_name')) %>%  # update here. 
+# Combine variables defining capture status into single variable. Add name of paired sample. 
+  mutate(approach = case_when(study_accession == 'PRJNA339209' ~ sample_title, 
+                              # Doyle
+                              study_accession == 'PRJEB21685' & library_strategy == 'Targeted-Capture'  ~ 'sputum capture',
+                              study_accession == 'PRJEB21685' & library_strategy == 'WGS' & MGIT_prep == 'culture' ~ 'culture',
+                             study_accession == 'PRJEB21685' &  library_strategy == 'WGS' & MGIT_prep == 'capture' ~ 'culture capture',
+                              study_accession %in% c('PRJEB29604','PRJEB38719','PRJEB37609') ~ sequencing, 
+                              study_accession == 'PRJEB9206' ~ Type)) %>% 
+   mutate(Approach = case_when((approach == 'Culture' & `Enriched?` == 'Yes') | approach == 'culture capture' ~ 'culture capture',
+                               approach == 'Bronchial washing' ~ 'BAL capture',
+     approach %in% c('direct respiratory sample','Sputum genotype','Targeted-Capture','Bait capture', 'Sputum','sputum capture')  ~ 'sputum capture',
+      approach %in% c('MGIT culture','WGS','Culture','culture') ~ 'culture',
+     approach %in% c('Direct sequencing') ~ 'lysis',
+     TRUE ~ approach)) %>% 
+  
+    # Combine variables defining patient
+  mutate(Patient = case_when(study_accession %in% c('PRJEB29604','PRJEB38719','PRJEB37609') ~ as.character(Patient.x),
+                             study_accession == 'PRJEB9206' ~ as.character(Patient.y),
+                             study_accession == 'PRJEB21685' ~ sample_title,
+                            study_accession == 'PRJNA339209' ~ library_name)) %>% 
+ 
+  mutate(Patient = case_when(study_accession == 'PRJNA339209' ~ str_remove(library_name,"m|\\.m|s|ds|\\.1|_.+|\\.I2"), TRUE ~ Patient), 
+         Patient = case_when(study_accession == 'PRJNA339209' ~ str_remove(Patient,"_.+"), TRUE ~ Patient)) %>% #filter(is.na(Patient)) %>% relocate(Patient, study_accession, study, Approach)
+    
+  # Combine data on smear status
+  mutate(smear = case_when(AFB_SCORE == 'Smear negative' | `Sputum positivity` == 'Neg' | Smear == '-' ~ 'negative',
+AFB_SCORE == 'AFB+' | `Sputum positivity` == '1+' | Smear == '+' ~ '1+',
+AFB_SCORE == 'AFB++' | `Sputum positivity` == '2+' | Smear == '++' ~ '2+',
+AFB_SCORE == 'AFB+++' | `Sputum positivity` == '3+' | Smear == '+++' ~ '3+',
+`Sputum positivity` %in% c("5 AFB", "9 AFB") | Smear == 'S' ~ 'scanty',
+TRUE ~ NA)) %>%
+  mutate(study = case_when(study_accession %in% c('PRJEB29604','PRJEB38719','PRJEB37609') ~ 'Goig',
+                           study_accession == 'PRJEB9206' ~ 'Brown',
+                           study_accession == 'PRJEB21685' ~ 'Doyle',
+                           study_accession == 'PRJNA339209' ~ 'Votintseva', 
+                           TRUE ~ NA))
+
+# Save
+write_csv(meta_capture_full, file = here('metadata/capture.csv'))
+
+```

@@ -12,7 +12,7 @@ Scripts accomanying our manuscript examining shared within-host *M. tuberculosis
 │   ├── 2-organize_metadata.Rmd # organize metadata accomapnying SRA data
 │   ├── 3-plots.Rmd # all manuscript plots
 │   ├── iqtree.sh # fit IQ-Tree maximum likelihood trees
-│   ├── config.R # define variables and paths
+│   ├── config.R # define variables and paths. **Needs to be updated for specific users/clusters.**
 │   ├── process_vcf_functions.R # functions for VCF input parsing
 
 ```

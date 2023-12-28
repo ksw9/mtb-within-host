@@ -31,10 +31,11 @@ vitoria_hh_info <- vitoria_hh_info %>% left_join(meta_vitoria %>% dplyr::select(
   mutate(pair_name = paste(sort(c(Run.x,Run.y)), collapse = '_')) 
 
 # Read in variant calling run summary. 
-vitoria_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-03-10_14-36-35.285596.tsv")
+vitoria_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/vitoria_run_summary_2023-12-23_17-17-22.350335.tsv")
+mean(vitoria_run_summary$Coverage_Median)
 
 # Save
-write_csv(vitoria_hh_info, file = here('metadata/vitoria.csv'))
+# write_csv(vitoria_hh_info, file = here('metadata/vitoria.csv'))
 ```
 ```{r bc}
 #### Organize metadata: BC ####
@@ -55,12 +56,15 @@ bc_hh <- read_csv(bc_hh_file)
 bc_hh <- bc_hh %>% left_join(meta_bc, by = c("library" = "LibraryName")) 
 
 # Read in variant calling run summary. Don't have this yet.  
-bc_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-07-07_01-28-31.690645.tsv")
-mean(bc_run_summary$Coverage_Mean) 
+bc_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/bc_hh_members_run_summary_2023-12-21_15-51-57.471676.tsv")
+mean(bc_run_summary$Coverage_Median, na.rm = TRUE) 
 length(which(bc_run_summary$Coverage_Mean > 50))
 
+# Read in variant calling run summary. 
+walker_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-07-07_01-28-31.690645.tsv")
+
 # Save
-write_csv(bc_hh, file = here('metadata/bc.csv'))
+# write_csv(bc_hh, file = here('metadata/bc.csv'))
 ```
 ```{r walker}
 #### Organize metadata: Walker ####

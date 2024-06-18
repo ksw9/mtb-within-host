@@ -14,28 +14,96 @@ here()
 source(here('scripts/config.R'))
 library(ggbeeswarm)
 library(ggsci)
-library(gtsummary)
+#library(gtsummary)
 library(colorspace)
 library(cowplot)
 library(ggridges)
 library(infer)
 library(yardstick)
-library(lme4)
 library(ggpubr)
 library(rstatix)
 library(ape)
 library(ggtree)
 library(harrietr)
 library(ggh4x)
+library(tidyverse)
+library(phytools)
+#save.image(file = here('hh.RData'))
+load(here('hh.RData'))
 
 # Read in run summaries
 vitoria_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/vitoria_run_summary_2023-12-23_17-17-22.350335.tsv")
 bc_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/bc_hh_members_run_summary_2023-12-21_15-51-57.471676.tsv")
 walker_run_summary = read_tsv("/uufs/chpc.utah.edu/common/home/walter-group2/tb/mtb-call2/results/pipeline_run_summary_2023-07-07_01-28-31.690645.tsv")
 
-run_summary = bind_rows(vitoria_run_summary,bc_run_summary,walker_run_summary)
+run_summary = bind_rows(vitoria_run_summary,bc_run_summary,walker_run_summary) %>%
+  mutate(mixed = case_when(str_detect(Strain, ';') ~ 'mixed', 
+                           TRUE ~ 'single'))
+run_summary %>%
+  filter(mixed == 'mixed')
+
+run_summary %>%
+  select(Batch, Strain) %>%
+  filter(Batch == 'walker') %>%
+  pull(Strain) %>% table()
 ```
 
+```{r lineages pie}
+lineages = walker_run_summary %>% mutate(strain = str_extract(Strain, '[a-z0-9]+')) %>%
+  filter(!strain == 'a1' & !is.na(strain)) %>% pull(strain) %>% unique()
+lineages
+pie1 = vitoria_run_summary %>%
+  mutate(lineage = str_extract(Strain, '[a-z0-9]+'), 
+         Strain = str_remove(Strain, 'lineage')) %>%
+  filter(!lineage == 'a1') %>%
+  group_by(lineage, Strain) %>%
+  summarize(n = n()) %>%
+  ggplot(aes(x = "", y = n, fill = lineage)) +
+  geom_col(color = "black") + 
+  geom_text(aes(label = Strain),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_npg(name = 'Lineage', limits = lineages) + theme_void()
+pie1
+pie2= bc_run_summary %>%
+  mutate(lineage = str_extract(Strain, '[a-z0-9]+'),
+                  Strain = str_remove(Strain, 'lineage')) %>%
+  filter(!lineage == 'a1') %>%
+  group_by(lineage, Strain) %>%
+  summarize(n = n()) %>%
+  ggplot(aes(x = "", y = n, fill = lineage)) +
+  geom_col(color = "black") +
+  geom_text(aes(label = Strain),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_npg(name = 'Lineage', limits = lineages) + theme_void()
+
+  
+pie3 = walker_run_summary %>%
+  mutate(lineage = str_extract(Strain, '[a-z0-9]+')) %>%
+  filter(!lineage == 'a1') %>%
+  group_by(lineage, Strain) %>%
+  summarize(n = n()) %>%
+  ggplot(aes(x = "", y = n, fill = lineage, color = 'grey')) +
+  geom_col(color = "black") +
+  coord_polar(theta = "y") +
+  scale_fill_npg(name = 'Lineage', limits = lineages) + theme_void()
+
+pies = plot_grid(pie1 + theme(legend.position="none") + theme( plot.margin = unit(c(-.5, -.5, -.5, -.5),"cm")),
+                 pie2 + theme(legend.position="none") + theme( plot.margin = unit(c(-.5, -.5, -.5, -.5),"cm")),
+                 pie3 + theme(legend.position="none") + theme( plot.margin = unit(c(-.5, -.5, -.5, -.5),"cm")),
+                 labels = 'auto', vjust = 8, nrow = 1, label_size = 12)
+pies
+legend = get_legend(
+  pie3 + theme(legend.box.margin = margin(0, 0, 0, 12))
+)
+
+# Add legend back
+pies_legend = plot_grid(pies, legend, rel_widths = c(3, .5))
+pies_legend
+ggsave(plot = pies_legend, filename = here('plots/lineage_pies.pdf'))
+
+```
 ```{r pairwise diffs}
 #### pairwise snp differences ####
 
@@ -68,7 +136,7 @@ d2 <- dist.dna(f2, model = 'N', as.matrix = TRUE, pairwise.deletion = FALSE)
 
 meta_bc_file = here('metadata/bc.csv')
 meta_bc = read_csv(meta_bc_file)
-
+meta_bc
 # Distances 
 d_long2 <- d2 %>% 
   melt_dist() %>% 
@@ -84,11 +152,8 @@ d_long2 <- d2 %>%
                              TRUE ~ 'Outside household'))
 table(d_long2$pair_id) 
 
-# 'BC10-Mtb118' missing
-# Look at single pair - distance of 21, though supposed to be in single house
-d_long2 %>% 
-  filter(sample_name.y == 'BC12-Mtb022' & sample_name.x == 'BC11-Mtb441')
-  
+# 'BC06-Mtb290', 'BC06-Mtb296' missing from sequence data. 
+
 # Histogram of pairwise SNP distances--include all. 
 d_long2 %>% 
   ggplot(aes(x = dist, fill = pair_id)) + 
@@ -122,23 +187,13 @@ d_long4 <- d4 %>%
 
 table(d_long4$pair_id)
 
-d_long4 %>% 
-  ggplot(aes(x = dist, fill = pair_id)) + 
-  geom_histogram() +
-  facet_wrap(~pair_id, scales = 'free') + 
-  theme_classic() + 
-  scale_fill_npg(name = 'Comparison type') + 
-  xlab('Pairwise SNP distance')
-
 # Combine into a single plot
-d_all = bind_rows(d_long1 %>% mutate(study = 'Colangeli'), 
-                  d_long2 %>% mutate(study = 'Guthrie'),
-                  d_long4 %>% mutate(study = 'Walker')) %>% 
+d_all = bind_rows(d_long1 %>% mutate(study = 'Colangeli et al. (2020)'), 
+                  d_long2 %>% mutate(study = 'Guthrie et al. (2018)'),
+                  d_long4 %>% mutate(study = 'Walker et al. (2014)')) %>% 
    mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
                              pair_id == 'Outside household' ~ 'Unlinked', 
                              TRUE ~ pair_id))
-         
-table(d_all$pair_id)
 
 # Plot all together: need to use facet_wrap to free the y-axis. 
 p_dists = ggplot(d_all, aes(x = dist, fill = pair_id, )) + 
@@ -157,6 +212,7 @@ p_dists = p_dists +
     )
   )
 
+
 # Look at proportion of epidemiologically linked pairs that don't fall under threshold. 
 d_all %>%
   #group_by(study) %>%
@@ -166,13 +222,6 @@ d_all %>%
          meets_threshold12 = case_when(dist <= 12 ~ TRUE, TRUE ~ FALSE)) %>%
   summarize(n() - sum(meets_threshold5), n(), 1-sum(meets_threshold5)/n(), n() - sum(meets_threshold12), 1-sum(meets_threshold12)/n(), n())
 
-# How many 
-d_all %>%
-  filter(pair_id == 'Household') %>%
-  ungroup() %>%
-  summarize(length(which(dist <= 2)), 
-            length(which(dist <= 2))/n())
-  filter(dist <= 2)
 ```
 ```{r clusters}
 # Cluster isolates from each study to see if clusters are larger than 2
@@ -195,7 +244,7 @@ sort(table(memberships4))
 clusters = enframe(c(memberships1, memberships2, memberships4), name = 'Sample', value = 'Cluster')
 
 # Add cluster memberships to full pairwise distances table
-d_all = d_all %>%
+d_full = d_all %>%
   dplyr::left_join(clusters, by = join_by(iso1 == Sample)) %>%
   left_join(clusters, by = join_by(iso2 == Sample)) %>%
   rename(Cluster1 = Cluster.x, Cluster2 = Cluster.y) %>%
@@ -203,7 +252,7 @@ d_all = d_all %>%
                    Cluster1 != Cluster2 ~ 'Not clustered',
                    TRUE ~ NA))
 
-table(d_all$pair_id, d_all$cluster_status)
+table(d_full$pair_id, d_full$cluster_status)
 ```
 ```{r iqtree}
 #### Plot IQTrees ####
@@ -219,25 +268,36 @@ meta_vitoria_tre = meta_vitoria %>%
   select(-name) %>%
   relocate(value)
 
-# Color tips by household membership. 
-# Add treescale -- not complete
-p1 = ggtree(tre1, layout="unrooted") %<+%
+# Mid-point root tree, all in same lineage. 
+tre1 = midpoint_root(tre1)
+
+p1 = ggtree(tre1) %<+%
   meta_vitoria_tre +
-  geom_tippoint(aes(color = as.factor(hh))) +
+  geom_tippoint(aes(color = as.factor(hh)), size = 2) +
   theme(legend.position = "none") +
-  scale_color_manual(values = rainbow_hcl(25))
+  scale_color_manual(values = rainbow_hcl(25)) +
+  geom_treescale(x = .0004, y = -.5,  family = 'arial')
 
 # Re-arrange meta_bc to per-sample
 meta_bc_tre <- meta_bc %>% 
   relocate(Run)
 
-p2 = ggtree(tre2, layout="unrooted") %<+%
+# Root on lineage1.2.1.2.1 isolates. 
+#lin1_isolates = bc_run_summary %>% filter(Strain == 'lineage1.2.1.2.1') %>% pull(Sample)
+#tre2_rooted = root(tre2, outgroup = lin1_isolates)
+
+# Mid-point root tree
+tre2_rooted = midpoint_root(tre2)
+
+p2 = ggtree(tre2_rooted) %<+%
   meta_bc_tre +
   geom_tippoint(aes(color = as.factor(hh))) +
   theme(legend.position = "none") +
-  scale_color_manual(values = rainbow_hcl(12))
+  scale_color_manual(values = rainbow_hcl(12)) + 
+  geom_treescale( family = 'arial')
+p2
 
-# Re-arrange meta_lee to per-sample
+# Re-arrange meta_walker to per-sample
 meta_walker_tre <- meta_walker %>% 
   mutate(epi_link = case_when(epi_link == 'Yes' ~ row_number(), 
                         TRUE ~ NA)) %>% 
@@ -246,19 +306,50 @@ meta_walker_tre <- meta_walker %>%
   relocate(value) %>%
   select(-name)
 
-p3 = ggtree(tre3, layout = 'unrooted') %<+%
+# Mid-point root tree
+tre3_rooted = midpoint_root(tre3)
+
+# Access tree data
+tre3_dat = tre3_rooted %>% as.treedata %>% as_tibble
+hh_members = meta_walker_tre %>% filter(!is.na(epi_link)) %>% pull(value)
+hh_members
+
+p3 = ggtree(tre3_rooted) %<+%
   meta_walker_tre +
   geom_tippoint(aes(color = as.factor(epi_link))) +
-  theme(legend.position = "none") 
-p3 = p3 +
-  scale_color_manual(values = rainbow_hcl(11), na.translate = FALSE)
-p3
+  theme(legend.position = "none") +
+  scale_color_manual(values = rainbow_hcl(11), na.translate = FALSE) + 
+  geom_treescale(x = .001, y = -10, family = 'arial')
 
-p_tre = plot_grid(p1,p2,p3, nrow = 3)
+# Get MRCA nodes to highlight with asterix: 
+getMRCA(tre3_rooted, c('ERR400343','ERR400334')) #359
+getMRCA(tre3_rooted, c('ERR400385','ERR400384')) #361
+getMRCA(tre3_rooted, c('ERR400511','ERR400513')) #304
+getMRCA(tre3_rooted, c('ERR400476','ERR400383')) #403
+getMRCA(tre3_rooted, c('ERR400498','ERR400522')) #299
+getMRCA(tre3_rooted, c('ERR400306','ERR400322')) #378
+getMRCA(tre3_rooted, c('ERR400306','ERR400369')) #378
+getMRCA(tre3_rooted, c('ERR400527','ERR400318')) #317
+getMRCA(tre3_rooted, c('ERR400318','ERR400536')) #318
+getMRCA(tre3_rooted, c('ERR400364','ERR400462')) #285
+getMRCA(tre3_rooted, c('ERR400420','ERR400518')) #315
+
+# Highlight nodes for hh pairs
+p3 = p3 + 
+  geom_cladelab(node = c(359,361, 304, 403, 299, 378, 317, 318, 285, 315), 
+                label = '*', barsize=0, vjust = .8, fontsize = 7, alpha = .9, hjust = 'center', vjust = 'center', 
+                  family = 'arial') 
+  
+p_tre = plot_grid(plot_grid(p1,p2, nrow = 2, labels = c('Colangeli et al. (2020)', 'Guthrie et al. (2018'), label_size = 10), 
+                  p3, ncol = 2, labels = c(NA, 'Walker et al. (2014)'), label_size = 10)
 
 # Combine trees and snp distances. 
-p_dists_tre = plot_grid(p_dists, p_tre, nrow = 1, labels = 'auto', rel_widths = c(1, .5))
-ggsave(p_dists_tre, filename = here('plots/p_dist_tre.pdf'), width = 12, height = 8)
+p_dists_tre = plot_grid(p_dists, p_tre, nrow = 1, labels = 'auto') 
+
+p_dists_tre
+#ggsave(p_tre, filename = here('plots/p_dist_tre.pdf'), width = 12, height = 8)
+#ggsave(p_dists_tre, filename = here('plots/p_dist_tre.eps'), width = 12, height = 8) # need to use arial as treescale font
+
 ```
 ```{r shared iSNV summaries}
 
@@ -280,8 +371,12 @@ shared_snps_filtered = shared_snps_summary %>%
                              TRUE ~ pair_id), 
          ppe_flag = case_when(ppe_flag == 'Outside' ~ 'Outside PE/PPE genes', 
                               TRUE ~ ppe_flag)) %>%
-  mutate(pair_id = factor(pair_id, levels = c('Sample','Household','Linked','Outside household','Unlinked'))) 
-
+  mutate(pair_id = factor(pair_id, levels = c('Sample','Household','Linked','Outside household','Unlinked'))) %>%
+  mutate(study = case_when(study == 'Colangeli' ~ 'Colangeli et al. (2020)', 
+                           study == 'Guthrie' ~ 'Guthrie et al. (2018)',
+                           study == 'Walker' ~ 'Walker et al. (2014)', 
+                          TRUE ~ NA))
+ 
 ```
 ```{r shared iSNV boxplot}
 # Plot shared variants
@@ -297,10 +392,10 @@ p1 = shared_snps_filtered %>%
    scale_color_jco(name ="Comparison type") 
 p1
 
-ggsave(p1, filename = here('plots/shared_isnvs_logscale.pdf'),
-      bg = 'transparent', height = 6, width = 8)
+# ggsave(p1, filename = here('plots/shared_isnvs_logscale.eps'),
+#       bg = 'transparent', height = 6, width = 8)
 
-# Apply a more conservative minor allele frequency threshold
+# Supplement: Apply a more conservative minor allele frequency threshold
 p2 = shared_snps_filtered %>% 
   filter(threshold %in% c(.01,.05,.1)) %>%
    ggboxplot(x = 'threshold', y = 'n', color = 'pair_id', palette = 'jco') + 
@@ -318,18 +413,20 @@ ggsave(p2, filename = here('plots/shared_isnvs_logscale_mafs.pdf'),
 
 ```
 ```{r shared iSNV table}
-# Summarize into table--round, order the pair_ids, reformat to make prettier
+# Summarize into table
 tab = shared_snps_filtered %>% 
   group_by(study,pair_id) %>% 
   rename('Comparison type' = pair_id) %>%
   filter(threshold == .01) %>%
-  dplyr::summarize(mean = mean(n), median = median(n),
-                   lower = quantile(n, c(.25, .75))[1],
-                   upper = quantile(n, c(.25, .75))[2]) %>%
-  dplyr::mutate_at(vars(mean, median, lower, upper), signif, digits = 2) %>%
-  gt::gt()
+  summarise(ci = list(mean_cl_normal(n) %>% 
+                        rename(mean=y, lwr=ymin, upr=ymax))) %>% 
+  unnest %>%
+  mutate_if(is.numeric, round, 1)
+
+tab %>%
+  write_excel_csv(file = here('plots/table2.csv'))
+
 tab
-gt::gtsave(tab, filename = here('plots/tab1.pdf')) # remove pair_id
 
 # Percentage in PE/PPE genes
 shared_snps_summary %>% 
@@ -339,9 +436,11 @@ shared_snps_summary %>%
   filter(threshold == .01 & dp_flag == 'Expected' & `Comparison type` == 'Sample') %>%
   ungroup() %>% group_by(study,ppe_flag) %>% 
   summarize(n = mean(n)) %>%
-  mutate(freq = n / sum(n))
+  mutate(total = sum(n), 
+         freq = n / total) %>%
+  mutate_if(is.numeric, round, 2)
 
-# Statistical test for variation in mean iSNVs in household pairs versus random pairs, grouped by study
+# Statistical test for variation in mean iSNVs in household pairs outside of PPE versus random pairs, grouped by study
 sample_snps_filt = shared_snps_filtered %>% 
   group_by(study,pair_id) %>% 
   filter(threshold == .01 & dp_flag == 'Expected' & pair_id != 'Sample') 
@@ -362,7 +461,7 @@ compare_means(data = sample_snps_filt, n ~ study, method = 'wilcox.test') # high
 
 # Combine iSNV data with consensus seq distances
 d_all_full = shared_snps_summary %>% 
-  filter(pair_id != 'Sample'& dp_flag == 'Expected' & ppe_flag == 'Outside') %>%
+  filter(pair_id != 'Sample' & dp_flag == 'Expected' & ppe_flag == 'Outside') %>%
   ungroup() %>% group_by(study, threshold) %>% 
   mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
                              pair_id == 'Outside household' ~ 'Unlinked', 
@@ -371,49 +470,64 @@ d_all_full = shared_snps_summary %>%
                         pair_id == 'Unlinked' ~ 0, TRUE ~ NA),
          hh = factor(hh), 
          threshold = as.factor(threshold)) %>%
-  rename(n_isnvs = 'n') %>%
+  rename(n_isnvs = 'n') %>% 
   # Join with genetic distances between samples
-  left_join(d_all) %>%
-  ungroup() %>% 
-  mutate(clust12 = case_when(dist <= 12 ~ 'clustered',
-                             TRUE ~ 'unclustered'), 
-         clust12 = factor(clust12, levels = c('unclustered', 'clustered', ordered = TRUE)), # Set unclustered as reference level
-         clust5 = case_when(dist <= 5 ~ 'clustered',
-                             TRUE ~ 'unclustered'), 
-         clust5 = factor(clust12, levels = c('unclustered', 'clustered', ordered = TRUE))) %>%
-  group_by(study) %>%
-  # Get the z-score for iSNVs, by study
-  mutate_at(vars(n_isnvs, dist), scale) 
+  left_join(d_full, by = 'pair_name') %>% 
+  ungroup()
 
+
+# Add cluster status
+d_all_full = d_all_full %>%
+  mutate(clust12 = case_when(dist <= 12 ~ 'clustered',
+                             dist > 12 ~ 'unclustered'), 
+         clust12 = factor(clust12, levels = c('unclustered', 'clustered'), ordered = TRUE), # Set unclustered as reference level
+         clust5 = case_when(dist <= 5 ~ 'clustered',
+                             dist > 5 ~ 'unclustered'), 
+         clust5 = factor(clust5, levels = c('unclustered', 'clustered'), ordered = TRUE)) %>%
+  rename(study = study.x, pair_id = pair_id.x) %>% select(!c(study.y, pair_id.y)) %>%
+  ungroup() %>% group_by(study) %>%
+  # Get the z-score for iSNVs, by study
+  mutate(n_isnvs_scaled = scale(n_isnvs), 
+         dist_scale = scale(dist)) %>%
+    mutate(study = case_when(study == 'Colangeli' ~ 'Colangeli et al. (2020)', 
+                           study == 'Guthrie' ~ 'Guthrie et al. (2018)',
+                           study == 'Walker' ~ 'Walker et al. (2014)', 
+                          TRUE ~ NA))
+
+table(d_all_full$study, useNA = 'always')
+```
+```{r models}
 # Model 0: logistic regression for household membership as a function of cluster status, study, scaled shared iSNVs
-m0 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ clust12 + study + n_isnvs, family = "binomial")
+m0 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ clust12 + study + n_isnvs_scaled, family = "binomial")
 summary(m0)
-cbind(exp(coefficients(m0)),exp(confint(m0)))
+cbind(exp(coefficients(m0)),exp(confint(m0))) %>%
+  round(2)
 
 # Model 0 predictions
-m0_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust12')], predict(m0, newdata = d_all_full[c('clust12','n_isnvs','study')],type = "response", se = TRUE))
+m0_pred <- cbind(d_all_full[c('n_isnvs_scaled','study', 'hh', 'clust12')], predict(m0, newdata = d_all_full[c('clust12','n_isnvs_scaled','study')],type = "response", se = TRUE))
 
 # Try for 5 SNP threshold
-m1 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ clust5 + study + n_isnvs, family = "binomial")
+m1 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ clust5 + study + n_isnvs_scaled, family = "binomial")
 summary(m1)
-cbind(exp(coefficients(m1)),exp(confint(m1)))
+cbind(exp(coefficients(m1)),exp(confint(m1))) %>%
+  round(2)
 
 # Model 1 predictions
-m1_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust5')], predict(m1, newdata = d_all_full[c('clust5','n_isnvs','study')],type = "response", se = TRUE))
+m1_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust5')], predict(m1, newdata = d_all_full[c('clust5','n_isnvs_scaled','study')],type = "response", se = TRUE))
 
 # Model 2: consensus-based clustering only 
 m2 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ clust12 + study, family = "binomial")
 summary(m2)
 
 # Model 2 predictions
-m2_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust12')], predict(m2, newdata = d_all_full[c('clust12','n_isnvs','study')],type = "response", se = TRUE))
+m2_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust12')], predict(m2, newdata = d_all_full[c('clust12','n_isnvs_scaled','study')],type = "response", se = TRUE))
 
 # Model 3 predictions
-m3 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ n_isnvs + study, family = "binomial")
+m3 = glm(data = d_all_full[which(d_all_full$threshold == .01),], formula = hh ~ n_isnvs_scaled + study, family = "binomial")
 summary(m3)
 
 # Model 3 predictions
-m3_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust12')], predict(m3, newdata = d_all_full[c('clust12','n_isnvs','study')],type = "response", se = TRUE))
+m3_pred <- cbind(d_all_full[c('n_isnvs','study', 'hh', 'clust12')], predict(m3, newdata = d_all_full[c('clust12','n_isnvs_scaled','study')],type = "response", se = TRUE))
 
 # AUCs
 roc_auc(m0_pred, truth = hh, fit, event_level = 'second')
@@ -422,10 +536,11 @@ roc_auc(m2_pred, truth = hh, fit, event_level = 'second') # without the minority
 roc_auc(m3_pred, truth = hh, fit, event_level = 'second') # minority variants only
 
 # Compare models with AUC curves.
-p_roc = m0_pred %>% mutate(model = 'Full model') %>%
-  bind_rows(m2_pred %>% mutate(model = 'Consensus\nsequences')) %>%
-  bind_rows(m3_pred %>% mutate(model = 'Shared iSNVs')) %>%
-  mutate(model = factor(model, levels = c('Full model', 'Consensus\nsequences', 'Shared iSNVs'), ordered = TRUE)) %>%
+p_roc = m0_pred %>% 
+  mutate(model = 'Full model') %>%
+  bind_rows(m2_pred %>% mutate(model = 'Genomic\nclustering')) %>%
+  bind_rows(m3_pred %>% mutate(model = 'Minority\nvariants')) %>%
+  mutate(model = factor(model, levels = c('Full model', 'Genomic\nclustering', 'Minority\nvariants'), ordered = TRUE)) %>%
   group_by(study,model) %>%
   roc_curve(truth = hh, fit, event_level = 'second') %>% 
   ggplot(aes(x = 1 - specificity, y = sensitivity, group = model, color = model)) + 
@@ -438,8 +553,8 @@ p_roc = m0_pred %>% mutate(model = 'Full model') %>%
 # Need to expand logistic regression to tidyr approach and use tidyr approach to generate predictions 
 preds = d_all_full %>%
   nest(data = -threshold) %>%
-  mutate(model = map(data, ~ glm(formula = hh ~ clust12 + study + n_isnvs, family = "binomial", data = .x)),
-        fitted = map(model, augment)) %>%
+  mutate(model = purrr::map(data, ~ glm(formula = hh ~ clust12 + study + n_isnvs_scaled, family = "binomial", data = .x)),
+        fitted = purrr::map(model, augment)) %>%
   unnest(fitted)
 preds
 
@@ -453,9 +568,10 @@ p_roc_alt = preds %>%
   facet_wrap(vars(study)) +
   geom_abline(slope=1, intercept = 0, linetype="dotted") +
   scale_color_viridis_d(name = 'MAF threshold')
+p_roc_alt
 
 # Save
-ggsave(p_roc_alt, width = 8, height = 3, filename = here(paste0(plot_dir, 'roc_alternate_thresholds.pdf')))
+#ggsave(p_roc_alt, width = 8, height = 3, filename = here(paste0(plot_dir, 'roc_alternate_thresholds.pdf')))
 
 # Print AUCs
 preds %>%
@@ -471,19 +587,10 @@ p_dist_isnvs = d_all_full %>%
   ggscatter(y = 'n_isnvs', x = 'dist', color = 'study',palette = 'jco') + 
             #facet.by = c('pair_id','study'), scales = 'free_x' ) +
   facet_grid(cols = vars(pair_id), rows = vars(study), scales = 'free') + 
-  stat_cor(method = "pearson", size = 3) + 
+  stat_cor(method = "pearson", size = 3, cor.coef.name = 'r') + 
   theme_classic() +
-  ylab('Number shared iSNVs') + xlab('Distance between consensus sequences')
+  ylab('Number shared minority variants') + xlab('Distance between consensus sequences') 
 p_dist_isnvs
-
-# Compare genomically clustered vs. unclustered isolates in # shared iSNVs
-d_all_full %>% 
-  ggplot(aes(x = cluster_status, y = n_isnvs, color = study, palette = 'jco')) + 
-  geom_quasirandom(size = .2, method = "tukey") +
-  facet_grid(rows = vars(study), scales = 'free') + 
-  stat_cor(method = "pearson", size = 3) + 
-  theme_classic() +
-  ylab('Number shared iSNVs') + xlab('Distance between consensus sequences')
 
 ```
 
@@ -508,26 +615,39 @@ snps_hh = bind_rows(snps_vitoria_sample,snps_bc_sample,snps_walker_sample) %>%
 mutate(study = factor(study, levels = c('Colangeli','Guthrie','Walker')),
 ppe_flag = case_when(ppe_flag == 'Outside' ~ 'Outside PE/PPE genes',
 TRUE ~ ppe_flag)) %>%
-  filter(!dp_flag == 'Low depth') 
+  filter(!dp_flag == 'Low depth')  %>%
+  mutate(study = case_when(study == 'Colangeli' ~ 'Colangeli et al. (2020)', 
+                           study == 'Guthrie' ~ 'Guthrie et al. (2018)',
+                           study == 'Walker' ~ 'Walker et al. (2014)', 
+                          TRUE ~ NA))
+
 
 p0 = snps_hh %>%
 ggplot(aes(y = Sample, x = maf, fill = study)) +
-#scale_x_continuous(trans=scales::pseudo_log_trans(base = 10)) +
-geom_density_ridges2(rel_min_height = 0.01) +
-theme_classic() + theme(axis.text.y=element_blank()) +
+#geom_density_ridges2(rel_min_height = 0.01) +
+  geom_histogram()+
+#geom_density_ridges(stat = 'binline', scale = 0.95, draw_baseline = TRUE, ) +
+theme_classic() + 
+  theme(axis.text.y=element_blank()) +
 xlab('Minor allele frequency') +
+ylab('Count of minority variants') +
 facet_wrap(~ppe_flag) +
 scale_fill_aaas() +
 coord_cartesian(xlim = c(0,.5)) 
 
 p0
-ggsave(p0, filename = here('plots/maf.pdf'), height = 6, width = 6.5, bg = 'transparent')
+ggsave(p0, filename = here('plots/maf.eps'), height = 6, width = 6.5, bg = 'transparent')
+  
 ```
 
 ```{r stacked bar}
 #### Shared iSNVs stacked barplot ####
 # Stacked barplot
 p_stacked_bar <- shared_snps_summary %>% 
+  mutate(study = case_when(study == 'Colangeli' ~ 'Colangeli et al. (2020)', 
+                           study == 'Guthrie' ~ 'Guthrie et al. (2018)',
+                           study == 'Walker' ~ 'Walker et al. (2014)', 
+                          TRUE ~ NA)) %>%
   filter(threshold == .01 & ppe_flag == 'Outside' & dp_flag == 'Expected') %>%
   mutate(pair_id = case_when(pair_id == 'Linked' ~ 'Household',
                              pair_id == 'Outside household' ~ 'Unlinked', 
@@ -547,7 +667,7 @@ p_stacked_bar <- shared_snps_summary %>%
   ggplot(aes(x = pair_id,y = n,fill = shared)) +
   geom_bar(position = "fill", stat = "identity") + 
   facet_wrap(~study) + 
-  scale_fill_viridis_d(name = 'Shared iSNVs') + theme_classic() + xlab('Comparison type') + ylab('Proportion pairwise comparisons') + 
+  scale_fill_viridis_d(name = 'Minority variants') + theme_classic() + xlab('Comparison type') + ylab('Proportion pairwise comparisons') + 
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) + 
   theme(plot.margin = unit(c(0,0,0,0), "lines")) + 
   theme(
@@ -559,7 +679,6 @@ p_stacked_bar <- shared_snps_summary %>%
     legend.box.background = element_rect(fill='transparent', color = NA), #transparent legend panel
     strip.background = element_rect(fill='transparent') 
   )
-p_stacked_bar
 
 # Combine stacked barplot and ROC curve
 p_roc_leg = get_legend(p_roc)
@@ -572,13 +691,17 @@ p_roc_bar = plot_grid(p_stacked_bar_noleg, p_stacked_bar_leg, p_roc_noleg, p_roc
                       nrow = 2, rel_widths = c(1.5, .3), scale = .9,
           label_size = 12)
 
-ggsave(p_roc_bar, filename = here('plots/roc_stacked_bar.pdf'), 
+ggsave(p_roc_bar, filename = here('plots/roc_stacked_bar.eps'), 
        bg = 'transparent', height = 8, width = 8.8)
- ```
+```
 
 ```{r SI plots: maf vs. site depth}
 # maf vs. site depth
 p_maf_vs_depth = bind_rows(snps_vitoria,snps_bc, snps_walker) %>%
+  mutate(study = case_when(study == 'Colangeli' ~ 'Colangeli et al. (2020)', 
+                           study == 'Guthrie' ~ 'Guthrie et al. (2018)',
+                           study == 'Walker' ~ 'Walker et al. (2014)', 
+                          TRUE ~ NA)) %>%
   filter(!(dp_flag == 'Low depth' | ppe_flag == "PE/PPE")) %>%
   ggscatter(y = 'maf', x = 'DP', color = 'study',palette = 'jco', scales = 'free') +
   stat_cor(method = "pearson", label.y = .52, size = 3) +
@@ -615,15 +738,19 @@ walker_shared = read_csv(here('results/processed/walker_shared_snps_ann.csv')) %
 p_maf_corr = vitoria_shared  %>%
   bind_rows(bc_shared) %>%
   bind_rows(walker_shared) %>% 
+    mutate(study = case_when(study == 'Colangeli' ~ 'Colangeli et al. (2020)', 
+                           study == 'Guthrie' ~ 'Guthrie et al. (2018)',
+                           study == 'Walker' ~ 'Walker et al. (2014)', 
+                          TRUE ~ NA)) %>%
   filter(ppe_flag == "Outside" & dp_flag == "Expected" & pair_id == 'Household' & maf.x >= .01 & maf.y >= .01) %>% 
   ggscatter(x = 'maf.x', y = 'maf.y', facet.by = 'study',
-  add = "reg.line", add.params = list(color = "blue", fill = "lightgray",
+  add = "reg.line", add.params = list(color = "gray", fill = "lightgray",
    conf.int = TRUE, cor.coef = TRUE)) + 
-  stat_cor(method = "pearson", label.x = .26, label.y = .44, size = 3) +
+  stat_cor(method = "pearson", label.x = .14, label.y = .44, size = 3, cor.coef.name = 'r') +
   xlab('Minor allele frequency, isolate 1') + 
   ylab('Minor allele frequency, isolate 2')
 
-ggsave(p_maf_corr, filename = here('plots/maf_corr.pdf'), height = 6, width = 10)
+ggsave(p_maf_corr, filename = here('plots/maf_corr.pdf'), height = 6, width = 8)
 
 # Remove large files
 rm(bc_shared,vitoria_shared,walker_shared)
